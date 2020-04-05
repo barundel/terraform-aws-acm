@@ -1,39 +1,36 @@
-resource "aws_acm_certificate" "cert" {
-  domain_name       = var.domain_name
-  validation_method = var.validation_method
-
-  tags = var.tags
+resource aws_acm_certificate this {
+  domain_name               = var.domain_name
+  subject_alternative_names = var.subject_alternative_names
+  validation_method         = var.validation_method
+  tags                      = var.tags
 
   lifecycle {
     create_before_destroy = true
+    ignore_changes = [
+      "subject_alternative_names",
+    ]
   }
 }
 
+resource aws_route53_record validation {
+  provider = "aws.certificate-validation"
+  count = var.validation_method == "DNS" && var.validate_certificate ? length(local.distinct_domain_names) : 0
 
-resource "aws_acm_certificate_validation" "domain_validation" {
-  count           = "${var.validation_method == "DNS" ? 1 : 0}"
-  certificate_arn = aws_acm_certificate.cert.arn
+  zone_id         = var.zone_id
+  name            = element(local.validation_domains, count.index)["resource_record_name"]
+  type            = element(local.validation_domains, count.index)["resource_record_type"]
+  ttl             = var.ttl
+  allow_overwrite = var.allow_overwrite_records
 
-  validation_record_fqdns = [
-    aws_route53_record.cert_validation.*.fqdn
+  records = [
+    element(local.validation_domains, count.index)["resource_record_value"]
   ]
+
+  depends_on = [aws_acm_certificate.this]
 }
 
-
-resource "aws_route53_record" "cert_validation" {
-  count    = "${var.validation_method == "DNS" && length(local.domain_lookup_list) > 0 ? length(local.domain_lookup_list) : 0}"
-
-  allow_overwrite = "${var.allow_overwrite_validation}"
-
-  name    = "${lookup(aws_acm_certificate.cert.domain_validation_options[count.index], "resource_record_name")}"
-  type    = "${lookup(aws_acm_certificate.cert.domain_validation_options[count.index], "resource_record_type")}"
-  records = ["${lookup(aws_acm_certificate.cert.domain_validation_options[count.index], "resource_record_value")}"]
-
-  zone_id = "${lookup(zipmap(local.ssl_name_list, data.aws_route53_zone.zones.*.id), lookup(aws_acm_certificate.cert.domain_validation_options[count.index], "domain_name"))}"
-  ttl     = "300"
-}
-
-locals {
-  domain_lookup_list = "${sort(concat(var.alt_domain_lookup, list(var.domain_name_lookup)))}"
-  ssl_name_list      = "${sort(concat(var.subject_alternative_names, list(var.domain_name)))}"
+resource aws_acm_certificate_validation this {
+  count                   = var.validation_method == "DNS" && var.validate_certificate ? 1 : 0
+  certificate_arn         = aws_acm_certificate.this.arn
+  validation_record_fqdns = aws_route53_record.validation.*.fqdn
 }
